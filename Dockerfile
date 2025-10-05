@@ -9,7 +9,7 @@ WORKDIR /app
 
 COPY . .
 
-RUN R -e "install.packages(c('plumber', 'jsonlite', 'TSP'), repos='https://cloud.r-project.org/')"
+RUN Rscript install_packages.R
 
 EXPOSE 8000
 
