@@ -290,6 +290,7 @@ assign_orders_to_trucks <- function(orders, trucks) {
 
 #* Solve Complete VRP with All Features
 #* @post /solve-complete-vrp
+#* @serializer unboxedJSON
 function(req) {
   
   tryCatch({
@@ -362,7 +363,7 @@ function(req) {
       }
     }
     
-    return(list(
+    list(
       status = "success",
       routing = list(
         routes = routing_result$solution,
@@ -382,13 +383,13 @@ function(req) {
         total_cost = as.numeric(round(routing_result$cost, 2)),
         time_violations = as.integer(late_count)
       )
-    ))
+    )
     
   }, error = function(e) {
-    return(list(
+    list(
       status = "error",
       message = as.character(e$message)
-    ))
+    )
   })
 }
 
