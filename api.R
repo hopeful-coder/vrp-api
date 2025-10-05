@@ -1,7 +1,6 @@
 # api.R - Enterprise VRP API
 library(plumber)
 library(jsonlite)
-#library(lpSolve)
 library(lubridate)
 
 #* @apiTitle Enterprise VRP Optimizer API
@@ -22,10 +21,6 @@ cors <- function(req, res) {
   }
 }
 
-# ============================================
-# HELPER FUNCTIONS
-# ============================================
-
 haversine_distance <- function(lat1, lon1, lat2, lon2) {
   R <- 6371
   lat1 <- lat1 * pi / 180
@@ -39,7 +34,6 @@ haversine_distance <- function(lat1, lon1, lat2, lon2) {
   return(R * c * 1.3)
 }
 
-# Clarke-Wright Savings Algorithm
 clarke_wright_vrp <- function(dist_mat, time_mat, all_locations, params) {
   n <- nrow(all_locations)
   depot <- 1
@@ -138,7 +132,6 @@ clarke_wright_vrp <- function(dist_mat, time_mat, all_locations, params) {
   ))
 }
 
-# Time window calculation
 solve_routes_with_time_windows <- function(routes_solution, orders, trucks, time_mat, depot_idx = 1) {
   if(is.null(routes_solution) || length(routes_solution$solution) == 0) {
     return(list())
@@ -163,14 +156,14 @@ solve_routes_with_time_windows <- function(routes_solution, orders, trucks, time
       prev_idx <- if(j == 1) depot_idx else route_customers[j-1]
       
       travel_time_min <- as.integer(round(time_mat[prev_idx, cust_idx]))
-      arrive_time <- current_time + lubridate::minutes(travel_time_min)
+      arrive_time <- current_time + minutes(travel_time_min)
       
       cust_order <- orders[[cust_idx - 1]]
       tw_early <- as.POSIXct(paste("2025-01-15", cust_order$tw_early), tz = "UTC")
       tw_late <- as.POSIXct(paste("2025-01-15", cust_order$tw_late), tz = "UTC")
       
       start_service <- max(arrive_time, tw_early)
-      depart_time <- start_service + lubridate::minutes(as.integer(cust_order$service_time_min))
+      depart_time <- start_service + minutes(as.integer(cust_order$service_time_min))
       
       early_violation <- arrive_time < tw_early
       late_violation <- start_service > tw_late
@@ -201,7 +194,6 @@ solve_routes_with_time_windows <- function(routes_solution, orders, trucks, time
   return(routes_with_times)
 }
 
-# Loading assignment
 assign_orders_to_trucks <- function(orders, trucks) {
   assignments <- list()
   unassigned <- list()
@@ -297,86 +289,92 @@ assign_orders_to_trucks <- function(orders, trucks) {
 }
 
 #* Solve Complete VRP with All Features
-#* @param warehouse:list Warehouse location {lat, lon}
-#* @param customers:list Array of customer objects
-#* @param fleet:list Array of truck objects
-#* @param params:list Optimization parameters
 #* @post /solve-complete-vrp
-function(warehouse, customers, fleet, params = list()) {
+function(req) {
   
-  warehouse <- fromJSON(warehouse)
-  customers <- fromJSON(customers)
-  fleet <- fromJSON(fleet)
-  params <- fromJSON(params)
-  
-  all_locations <- c(list(warehouse), customers)
-  n <- length(all_locations)
-  
-  dist_mat <- matrix(0, n, n)
-  time_mat <- matrix(0, n, n)
-  
-  for(i in 1:n) {
-    for(j in 1:n) {
-      if(i != j) {
-        dist_mat[i,j] <- haversine_distance(
-          all_locations[[i]]$lat, all_locations[[i]]$lon,
-          all_locations[[j]]$lat, all_locations[[j]]$lon
-        )
-        time_mat[i,j] <- (dist_mat[i,j] / 40) * 60
+  tryCatch({
+    body <- fromJSON(req$postBody)
+    
+    warehouse <- body$warehouse
+    customers <- body$customers
+    fleet <- body$fleet
+    params <- if(!is.null(body$params)) body$params else list()
+    
+    all_locations <- c(list(warehouse), customers)
+    n <- length(all_locations)
+    
+    dist_mat <- matrix(0, n, n)
+    time_mat <- matrix(0, n, n)
+    
+    for(i in 1:n) {
+      for(j in 1:n) {
+        if(i != j) {
+          dist_mat[i,j] <- haversine_distance(
+            all_locations[[i]]$lat, all_locations[[i]]$lon,
+            all_locations[[j]]$lat, all_locations[[j]]$lon
+          )
+          time_mat[i,j] <- (dist_mat[i,j] / 40) * 60
+        }
       }
     }
-  }
-  
-  default_params <- list(
-    num_trucks = length(fleet),
-    truck_capacity = 50,
-    max_route_time = 720,
-    max_stops_per_truck = 20,
-    cost_per_km = 0.5,
-    cost_per_truck = 200,
-    driver_cost_per_hour = 25
-  )
-  
-  params <- modifyList(default_params, params)
-  
-  all_locs_df <- do.call(rbind, lapply(all_locations, as.data.frame))
-  
-  routing_result <- clarke_wright_vrp(dist_mat, time_mat, all_locs_df, params)
-  
-  time_windows <- solve_routes_with_time_windows(
-    routing_result, customers, fleet, time_mat
-  )
-  
-  loading_result <- assign_orders_to_trucks(customers, fleet)
-  
-  late_count <- 0
-  for(route in time_windows) {
-    for(stop in route$stops) {
-      if(stop$late_violation) late_count <- late_count + 1
-    }
-  }
-  
-  return(list(
-    status = "success",
-    routing = list(
-      routes = routing_result$solution,
-      cost = routing_result$cost,
-      total_distance = routing_result$total_distance,
-      total_time = routing_result$total_time,
-      trucks_used = routing_result$trucks_used
-    ),
-    time_windows = time_windows,
-    loading = loading_result,
-    kpis = list(
-      total_orders = length(customers),
-      orders_assigned = length(loading_result$assignments),
-      orders_unassigned = length(loading_result$unassigned),
-      trucks_used = routing_result$trucks_used,
-      total_distance_km = round(routing_result$total_distance, 1),
-      total_cost = round(routing_result$cost, 2),
-      time_violations = late_count
+    
+    default_params <- list(
+      num_trucks = length(fleet),
+      truck_capacity = 50,
+      max_route_time = 720,
+      max_stops_per_truck = 20,
+      cost_per_km = 0.5,
+      cost_per_truck = 200,
+      driver_cost_per_hour = 25
     )
-  ))
+    
+    params <- modifyList(default_params, params)
+    
+    all_locs_df <- do.call(rbind, lapply(all_locations, as.data.frame))
+    
+    routing_result <- clarke_wright_vrp(dist_mat, time_mat, all_locs_df, params)
+    
+    time_windows <- solve_routes_with_time_windows(
+      routing_result, customers, fleet, time_mat
+    )
+    
+    loading_result <- assign_orders_to_trucks(customers, fleet)
+    
+    late_count <- 0
+    for(route in time_windows) {
+      for(stop in route$stops) {
+        if(stop$late_violation) late_count <- late_count + 1
+      }
+    }
+    
+    return(list(
+      status = "success",
+      routing = list(
+        routes = routing_result$solution,
+        cost = routing_result$cost,
+        total_distance = routing_result$total_distance,
+        total_time = routing_result$total_time,
+        trucks_used = routing_result$trucks_used
+      ),
+      time_windows = time_windows,
+      loading = loading_result,
+      kpis = list(
+        total_orders = length(customers),
+        orders_assigned = length(loading_result$assignments),
+        orders_unassigned = length(loading_result$unassigned),
+        trucks_used = routing_result$trucks_used,
+        total_distance_km = round(routing_result$total_distance, 1),
+        total_cost = round(routing_result$cost, 2),
+        time_violations = late_count
+      )
+    ))
+    
+  }, error = function(e) {
+    return(list(
+      status = "error",
+      message = as.character(e$message)
+    ))
+  })
 }
 
 #* Health check
@@ -395,13 +393,7 @@ function() {
       "Clarke-Wright routing algorithm",
       "Time window optimization",
       "Multi-temperature loading",
-      "LIFO constraints",
       "Real-time cost calculation"
-    ),
-    endpoints = list(
-      "/health" = "Health check",
-      "/solve-complete-vrp" = "Complete VRP solution (POST)"
     )
   )
 }
-
