@@ -1,7 +1,7 @@
 # api.R - Enterprise VRP API
 library(plumber)
 library(jsonlite)
-library(lpSolve)
+#library(lpSolve)
 library(lubridate)
 
 #* @apiTitle Enterprise VRP Optimizer API
@@ -404,3 +404,4 @@ function() {
     )
   )
 }
+
