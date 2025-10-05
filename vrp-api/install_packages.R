@@ -1,2 +1,3 @@
 # install_packages.R
-install.packages(c("plumber", "jsonlite", "TSP"))
+
+install.packages(c("plumber", "jsonlite", "lpSolve","TSP"))
