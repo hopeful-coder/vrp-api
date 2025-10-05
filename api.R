@@ -293,16 +293,18 @@ assign_orders_to_trucks <- function(orders, trucks) {
 function(req) {
   
   tryCatch({
-    body <- fromJSON(req$postBody)
+    body <- fromJSON(req$postBody, simplifyVector = FALSE)
     
     warehouse <- body$warehouse
     customers <- body$customers
     fleet <- body$fleet
     params <- if(!is.null(body$params)) body$params else list()
     
+    # Convert lists to proper format
     all_locations <- c(list(warehouse), customers)
     n <- length(all_locations)
     
+    # Build distance and time matrices
     dist_mat <- matrix(0, n, n)
     time_mat <- matrix(0, n, n)
     
@@ -310,14 +312,17 @@ function(req) {
       for(j in 1:n) {
         if(i != j) {
           dist_mat[i,j] <- haversine_distance(
-            all_locations[[i]]$lat, all_locations[[i]]$lon,
-            all_locations[[j]]$lat, all_locations[[j]]$lon
+            as.numeric(all_locations[[i]]$lat), 
+            as.numeric(all_locations[[i]]$lon),
+            as.numeric(all_locations[[j]]$lat), 
+            as.numeric(all_locations[[j]]$lon)
           )
           time_mat[i,j] <- (dist_mat[i,j] / 40) * 60
         }
       }
     }
     
+    # Set default parameters
     default_params <- list(
       num_trucks = length(fleet),
       truck_capacity = 50,
@@ -330,7 +335,13 @@ function(req) {
     
     params <- modifyList(default_params, params)
     
-    all_locs_df <- do.call(rbind, lapply(all_locations, as.data.frame))
+    # Convert to dataframe for algorithm
+    all_locs_df <- data.frame(
+      lat = sapply(all_locations, function(x) as.numeric(x$lat)),
+      lon = sapply(all_locations, function(x) as.numeric(x$lon)),
+      demand = sapply(all_locations, function(x) as.numeric(x$demand)),
+      service_time_min = sapply(all_locations, function(x) as.numeric(x$service_time_min))
+    )
     
     routing_result <- clarke_wright_vrp(dist_mat, time_mat, all_locs_df, params)
     
@@ -342,8 +353,12 @@ function(req) {
     
     late_count <- 0
     for(route in time_windows) {
-      for(stop in route$stops) {
-        if(stop$late_violation) late_count <- late_count + 1
+      if(!is.null(route$stops)) {
+        for(stop in route$stops) {
+          if(!is.null(stop$late_violation) && stop$late_violation) {
+            late_count <- late_count + 1
+          }
+        }
       }
     }
     
