@@ -366,21 +366,21 @@ function(req) {
       status = "success",
       routing = list(
         routes = routing_result$solution,
-        cost = routing_result$cost,
-        total_distance = routing_result$total_distance,
-        total_time = routing_result$total_time,
-        trucks_used = routing_result$trucks_used
+        cost = as.numeric(routing_result$cost),
+        total_distance = as.numeric(routing_result$total_distance),
+        total_time = as.numeric(routing_result$total_time),
+        trucks_used = as.integer(routing_result$trucks_used)
       ),
       time_windows = time_windows,
       loading = loading_result,
       kpis = list(
-        total_orders = length(customers),
-        orders_assigned = length(loading_result$assignments),
-        orders_unassigned = length(loading_result$unassigned),
-        trucks_used = routing_result$trucks_used,
-        total_distance_km = round(routing_result$total_distance, 1),
-        total_cost = round(routing_result$cost, 2),
-        time_violations = late_count
+        total_orders = as.integer(length(customers)),
+        orders_assigned = as.integer(length(loading_result$assignments)),
+        orders_unassigned = as.integer(length(loading_result$unassigned)),
+        trucks_used = as.integer(routing_result$trucks_used),
+        total_distance_km = as.numeric(round(routing_result$total_distance, 1)),
+        total_cost = as.numeric(round(routing_result$cost, 2)),
+        time_violations = as.integer(late_count)
       )
     ))
     
