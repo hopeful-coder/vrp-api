@@ -1,10 +1,13 @@
-# api.R - Enterprise VRP API
+# api.R - Enterprise VRP API with Mapbox Distance Matrix
 library(plumber)
 library(jsonlite)
 library(lubridate)
+library(httr)
 
 #* @apiTitle Enterprise VRP Optimizer API
-#* @apiDescription Complete vehicle routing with loading optimization, time windows, and multi-temperature zones
+#* @apiDescription Complete vehicle routing with Mapbox routing
+
+MAPBOX_TOKEN <- "pk.eyJ1IjoibG9va2luZzEyMzQiLCJhIjoiY21nYjZ0YjNqMDljZDJrb2J2dHZhYzZzdyJ9.JhMF7sHLwpztt5fY1bAIeQ"
 
 #* Enable CORS
 #* @filter cors
@@ -32,6 +35,98 @@ haversine_distance <- function(lat1, lon1, lat2, lon2) {
   c <- 2 * atan2(sqrt(a), sqrt(1-a))
   
   return(R * c * 1.3)
+}
+
+get_mapbox_matrix <- function(coords, token = MAPBOX_TOKEN) {
+  # Mapbox Matrix API supports up to 25 locations
+  # coords is a list of c(lon, lat) pairs
+  
+  n <- length(coords)
+  if(n > 25) {
+    warning("Mapbox Matrix API limited to 25 locations. Truncating.")
+    n <- 25
+    coords <- coords[1:25]
+  }
+  
+  # Build coordinate string: "lon,lat;lon,lat;..."
+  coord_str <- paste(sapply(coords, function(c) paste(c[1], c[2], sep=",")), collapse=";")
+  
+  url <- sprintf(
+    "https://api.mapbox.com/directions-matrix/v1/mapbox/driving/%s",
+    coord_str
+  )
+  
+  response <- tryCatch({
+    GET(url, query = list(
+      access_token = token,
+      sources = paste(0:(n-1), collapse=";"),
+      destinations = paste(0:(n-1), collapse=";"),
+      annotations = "distance,duration"
+    ), timeout(30))
+  }, error = function(e) NULL)
+  
+  if(!is.null(response) && status_code(response) == 200) {
+    content <- content(response, "text", encoding = "UTF-8")
+    data <- fromJSON(content)
+    
+    if(!is.null(data$distances) && !is.null(data$durations)) {
+      # Convert meters to km, seconds to minutes
+      dist_mat <- data$distances / 1000
+      time_mat <- data$durations / 60
+      
+      return(list(
+        distances = dist_mat,
+        durations = time_mat,
+        success = TRUE
+      ))
+    }
+  }
+  
+  return(list(success = FALSE))
+}
+
+build_distance_matrix <- function(all_locations, use_mapbox = FALSE) {
+  n <- length(all_locations)
+  dist_mat <- matrix(0, n, n)
+  time_mat <- matrix(0, n, n)
+  
+  if(use_mapbox && n <= 25) {
+    # Build coordinate list
+    coords <- lapply(all_locations, function(loc) {
+      c(as.numeric(loc$lon), as.numeric(loc$lat))
+    })
+    
+    result <- get_mapbox_matrix(coords)
+    
+    if(result$success) {
+      return(list(
+        dist_mat = result$distances,
+        time_mat = result$durations,
+        method = "mapbox"
+      ))
+    }
+  }
+  
+  # Fallback to haversine for large sets or if Mapbox fails
+  for(i in 1:n) {
+    for(j in 1:n) {
+      if(i != j) {
+        dist_mat[i,j] <- haversine_distance(
+          as.numeric(all_locations[[i]]$lat),
+          as.numeric(all_locations[[i]]$lon),
+          as.numeric(all_locations[[j]]$lat),
+          as.numeric(all_locations[[j]]$lon)
+        )
+        time_mat[i,j] <- (dist_mat[i,j] / 40) * 60
+      }
+    }
+  }
+  
+  return(list(
+    dist_mat = dist_mat,
+    time_mat = time_mat,
+    method = "haversine"
+  ))
 }
 
 clarke_wright_vrp <- function(dist_mat, time_mat, all_locations, params) {
@@ -288,7 +383,7 @@ assign_orders_to_trucks <- function(orders, trucks) {
   ))
 }
 
-#* Solve Complete VRP with All Features
+#* Solve Complete VRP with Mapbox routing
 #* @post /solve-complete-vrp
 #* @serializer unboxedJSON
 function(req) {
@@ -300,28 +395,15 @@ function(req) {
     customers <- body$customers
     fleet <- body$fleet
     params <- if(!is.null(body$params)) body$params else list()
+    use_mapbox <- if(!is.null(body$use_mapbox)) body$use_mapbox else FALSE
     
-    # Convert lists to proper format
     all_locations <- c(list(warehouse), customers)
     n <- length(all_locations)
     
-    # Build distance and time matrices
-    dist_mat <- matrix(0, n, n)
-    time_mat <- matrix(0, n, n)
-    
-    for(i in 1:n) {
-      for(j in 1:n) {
-        if(i != j) {
-          dist_mat[i,j] <- haversine_distance(
-            as.numeric(all_locations[[i]]$lat), 
-            as.numeric(all_locations[[i]]$lon),
-            as.numeric(all_locations[[j]]$lat), 
-            as.numeric(all_locations[[j]]$lon)
-          )
-          time_mat[i,j] <- (dist_mat[i,j] / 40) * 60
-        }
-      }
-    }
+    # Build distance matrix (with or without Mapbox)
+    matrix_result <- build_distance_matrix(all_locations, use_mapbox)
+    dist_mat <- matrix_result$dist_mat
+    time_mat <- matrix_result$time_mat
     
     # Set default parameters
     default_params <- list(
@@ -365,6 +447,7 @@ function(req) {
     
     list(
       status = "success",
+      routing_method = matrix_result$method,
       routing = list(
         routes = routing_result$solution,
         cost = as.numeric(routing_result$cost),
@@ -404,12 +487,12 @@ function() {
 function() {
   list(
     name = "Enterprise VRP Optimizer API",
-    version = "2.0",
+    version = "3.0",
     features = list(
       "Clarke-Wright routing algorithm",
+      "Mapbox Matrix API for real routing distances",
       "Time window optimization",
-      "Multi-temperature loading",
-      "Real-time cost calculation"
+      "Multi-temperature loading"
     )
   )
 }
